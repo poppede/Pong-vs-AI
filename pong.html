@@ -38,6 +38,27 @@
             opacity: 0.8;
         }
 
+        #audioControls {
+            margin-top: 10px;
+            font-size: 12px;
+            opacity: 0.7;
+        }
+
+        .audio-btn {
+            background: transparent;
+            border: 1px solid #0f0;
+            color: #0f0;
+            padding: 5px 10px;
+            margin: 0 5px;
+            cursor: pointer;
+            font-family: 'Courier New', monospace;
+        }
+
+        .audio-btn:hover {
+            background: #0f0;
+            color: #000;
+        }
+
         #startScreen {
             position: absolute;
             top: 50%;
@@ -63,6 +84,10 @@
         <div id="score">Player: 0 | AI: 0</div>
         <canvas id="gameCanvas" width="800" height="400"></canvas>
         <div id="instructions">Use W/S or ↑/↓ to move | SPACE to start/pause</div>
+        <div id="audioControls">
+            <button class="audio-btn" onclick="toggleMusic()">MUSIC</button>
+            <button class="audio-btn" onclick="toggleSounds()">SFX</button>
+        </div>
         <div id="startScreen">
             <div class="blink">PRESS SPACE TO START</div>
         </div>
@@ -81,6 +106,16 @@
         let playerScore = 0;
         let aiScore = 0;
         const winScore = 5;
+
+        // Audio state
+        let musicEnabled = true;
+        let soundEnabled = true;
+        let audioContext;
+        let musicOscillator;
+        let musicGain;
+        let musicNotes = [130.81, 146.83, 164.81, 174.61, 196.00, 220.00, 246.94, 261.63]; // C3 to C4
+        let currentNoteIndex = 0;
+        let musicTimer;
 
         // Paddle properties
         const paddleWidth = 15;
@@ -122,6 +157,12 @@
                     startGame();
                 } else {
                     gamePaused = !gamePaused;
+                    if (gamePaused && musicOscillator) {
+                        clearTimeout(musicTimer);
+                        musicOscillator.stop();
+                    } else if (!gamePaused && musicEnabled) {
+                        startMusic();
+                    }
                 }
             }
         });
@@ -137,6 +178,8 @@
             aiScore = 0;
             resetBall();
             startScreen.style.display = 'none';
+            initAudio();
+            startMusic();
             gameLoop();
         }
 
@@ -192,6 +235,86 @@
             }
         }
 
+        function initAudio() {
+            audioContext = new (window.AudioContext || window.webkitAudioContext)();
+        }
+
+        function startMusic() {
+            if (!musicEnabled || !audioContext) return;
+            
+            musicGain = audioContext.createGain();
+            musicGain.gain.value = 0.1;
+            musicGain.connect(audioContext.destination);
+            
+            playMusicNote();
+        }
+
+        function playMusicNote() {
+            if (!musicEnabled || !audioContext || !gameRunning) return;
+            
+            musicOscillator = audioContext.createOscillator();
+            musicOscillator.type = 'square';
+            musicOscillator.frequency.value = musicNotes[currentNoteIndex];
+            musicOscillator.connect(musicGain);
+            musicOscillator.start();
+            
+            musicTimer = setTimeout(() => {
+                musicOscillator.stop();
+                currentNoteIndex = (currentNoteIndex + 1) % musicNotes.length;
+                playMusicNote();
+            }, 500);
+        }
+
+        function playSound(type) {
+            if (!soundEnabled || !audioContext) return;
+            
+            const oscillator = audioContext.createOscillator();
+            const gain = audioContext.createGain();
+            
+            oscillator.connect(gain);
+            gain.connect(audioContext.destination);
+            
+            switch(type) {
+                case 'paddle':
+                    oscillator.type = 'square';
+                    oscillator.frequency.value = 200;
+                    gain.gain.value = 0.2;
+                    break;
+                case 'wall':
+                    oscillator.type = 'square';
+                    oscillator.frequency.value = 150;
+                    gain.gain.value = 0.1;
+                    break;
+                case 'score':
+                    oscillator.type = 'sawtooth';
+                    oscillator.frequency.value = 100;
+                    gain.gain.value = 0.3;
+                    break;
+                case 'win':
+                    oscillator.type = 'sine';
+                    oscillator.frequency.value = 500;
+                    gain.gain.value = 0.3;
+                    break;
+            }
+            
+            oscillator.start();
+            oscillator.stop(audioContext.currentTime + 0.1);
+        }
+
+        function toggleMusic() {
+            musicEnabled = !musicEnabled;
+            if (musicEnabled && gameRunning && !gamePaused) {
+                startMusic();
+            } else if (musicOscillator) {
+                clearTimeout(musicTimer);
+                musicOscillator.stop();
+            }
+        }
+
+        function toggleSounds() {
+            soundEnabled = !soundEnabled;
+        }
+
         function updateBall() {
             ball.x += ball.dx;
             ball.y += ball.dy;
@@ -199,6 +322,7 @@
             // Ball collision with top/bottom walls
             if (ball.y - ball.radius <= 0 || ball.y + ball.radius >= canvas.height) {
                 ball.dy = -ball.dy;
+                playSound('wall');
             }
 
             // Ball collision with player paddle
@@ -211,6 +335,7 @@
                 const relativeIntersectY = (player.y + paddleHeight / 2) - ball.y;
                 const normalizedRelativeIntersectionY = relativeIntersectY / (paddleHeight / 2);
                 ball.dy = -normalizedRelativeIntersectionY * ball.speed;
+                playSound('paddle');
             }
 
             // Ball collision with AI paddle
@@ -223,12 +348,14 @@
                 const relativeIntersectY = (ai.y + paddleHeight / 2) - ball.y;
                 const normalizedRelativeIntersectionY = relativeIntersectY / (paddleHeight / 2);
                 ball.dy = -normalizedRelativeIntersectionY * ball.speed;
+                playSound('paddle');
             }
 
             // Scoring
             if (ball.x < 0) {
                 aiScore++;
                 updateScore();
+                playSound('score');
                 resetBall();
                 checkWin();
             }
@@ -236,6 +363,7 @@
             if (ball.x > canvas.width) {
                 playerScore++;
                 updateScore();
+                playSound('score');
                 resetBall();
                 checkWin();
             }
@@ -248,10 +376,19 @@
         function checkWin() {
             if (playerScore >= winScore) {
                 gameRunning = false;
+                if (musicOscillator) {
+                    clearTimeout(musicTimer);
+                    musicOscillator.stop();
+                }
+                playSound('win');
                 startScreen.innerHTML = '<div style="color: #0f0; font-size: 24px;">YOU WIN!</div><div class="blink">PRESS SPACE TO PLAY AGAIN</div>';
                 startScreen.style.display = 'block';
             } else if (aiScore >= winScore) {
                 gameRunning = false;
+                if (musicOscillator) {
+                    clearTimeout(musicTimer);
+                    musicOscillator.stop();
+                }
                 startScreen.innerHTML = '<div style="color: #f00; font-size: 24px;">AI WINS!</div><div class="blink">PRESS SPACE TO PLAY AGAIN</div>';
                 startScreen.style.display = 'block';
             }
